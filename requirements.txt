@@ -2,4 +2,3 @@ duckdb
 pandas
 numpy
 tqdm
-polars
