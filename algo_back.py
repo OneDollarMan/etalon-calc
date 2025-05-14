@@ -53,43 +53,35 @@ query = """
 def select_etalon(df, df_equip) -> (pd.DataFrame, pd.DataFrame):
     # Инициализация полей
     df['is_etalon'] = 0
+    df['sales_cum_sum'] = 0.0
 
     results = []
     for _, row in tqdm(iterable=df_equip.iterrows(), total=len(df_equip)):
+        store = row['Код Склада']
         equip_type = row['Тип оборудования']
         equip_capacity = row['Квота']
 
-        # берем группы оборудования
-        df1 = df[df.equip_type == equip_type].copy()
+        # берем товары по оборудованию и магазину
+        subset_mask = (df.equip_type == equip_type) & (df.Store == store)
+        subset = df.loc[subset_mask].copy()
 
-        # сортировка по критерию
-        df1 = df1.sort_values(by='Row_num', ascending=True)
+        # Считаем накопительные продажи (cum sum по part_sales) внутри категорий (cat4)
+        subset['sales_cum_sum'] = subset.groupby('cat4')['part_sales'].cumsum()
+
+        # сортировка по накопительным продажам
+        subset = subset.sort_values(by=['sales_cum_sum'], ascending=True)
 
         # выбираем первые equip_capacity товаров
-        selected_idx = df1.index[:equip_capacity]
-        df.loc[selected_idx, 'is_etalon'] = 1
+        selected_idx = subset.index[:equip_capacity]
 
-        etal = df1.loc[selected_idx].groupby(['cat4', 'equip_type']) \
+        # обновляем значения в исходном df
+        df.loc[selected_idx, 'is_etalon'] = 1
+        df.loc[subset_mask, 'sales_cum_sum'] = subset['sales_cum_sum']
+
+        etal = subset.loc[selected_idx].groupby(['cat4', 'equip_type']) \
             .agg({'is_etalon': 'sum'}) \
             .rename(columns={'is_etalon': 'prod_count'}) \
             .reset_index()
-
-        prod_count = etal.prod_count.sum()
-        if prod_count < equip_capacity:
-            # не хватило статистики товара, нужно расширить эталон под доступное оборудование
-
-            etal['prod_count'] = np.floor(equip_capacity * etal.prod_count / prod_count)
-
-            # X = сколько еще осталось полки
-            X = equip_capacity - etal.prod_count.sum()
-
-            # дополняем еще по одной штуке у товаров с большим количеством
-            etal = etal.sort_values(by='prod_count', ascending=False)
-
-            # берем сверху столько записей чтобы покрыло Х
-            # увеличиваем у них количество
-            etal.loc[:int(X), 'prod_count'] += 1
-
         results.append(etal)
 
     etal = pd.concat(results)
